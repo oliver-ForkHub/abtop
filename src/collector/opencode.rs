@@ -1,7 +1,7 @@
 use super::process;
 use crate::model::{AgentSession, ChildProcess, SessionStatus};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -61,7 +61,10 @@ impl OpenCodeCollector {
         let pid_commands: HashMap<u32, &str> = opencode_pids
             .iter()
             .filter_map(|&pid| {
-                shared.process_info.get(&pid).map(|p| (pid, p.command.as_str()))
+                shared
+                    .process_info
+                    .get(&pid)
+                    .map(|p| (pid, p.command.as_str()))
             })
             .collect();
 
@@ -76,8 +79,10 @@ impl OpenCodeCollector {
         let now_ms = current_time_ms();
         let mut sessions = Vec::new();
 
+        let mut claimed_pids = HashSet::new();
         for ds in &self.cached_db_sessions {
-            let matched_pid = Self::match_pid_to_session(&pid_commands, &ds.directory);
+            let matched_pid =
+                Self::match_pid_to_session_once(&pid_commands, &ds.directory, &mut claimed_pids);
             // Drop sessions whose process isn't running. (Done sessions are
             // filtered out by MultiCollector::collect anyway, so emitting
             // a Done row here would be dead code.)
@@ -197,10 +202,10 @@ impl OpenCodeCollector {
     }
 
     fn find_opencode_pids(process_info: &HashMap<u32, process::ProcInfo>) -> Vec<u32> {
-        process_info.iter()
+        process_info
+            .iter()
             .filter(|(_, info)| {
-                process::cmd_has_binary(&info.command, "opencode")
-                    && !info.command.contains("grep")
+                process::cmd_has_binary(&info.command, "opencode") && !info.command.contains("grep")
             })
             .map(|(pid, _)| *pid)
             .collect()
@@ -212,9 +217,25 @@ impl OpenCodeCollector {
     /// to this session — we deliberately do not fall back to "the only
     /// opencode process" here, because that would mark every DB row as
     /// alive whenever a single opencode is running in an unrelated dir.
-    fn match_pid_to_session(
+    #[cfg(test)]
+    fn match_pid_to_session(pid_commands: &HashMap<u32, &str>, session_dir: &str) -> Option<u32> {
+        Self::match_pid_to_session_excluding(pid_commands, session_dir, &HashSet::new())
+    }
+
+    fn match_pid_to_session_once(
         pid_commands: &HashMap<u32, &str>,
         session_dir: &str,
+        claimed_pids: &mut HashSet<u32>,
+    ) -> Option<u32> {
+        let pid = Self::match_pid_to_session_excluding(pid_commands, session_dir, claimed_pids)?;
+        claimed_pids.insert(pid);
+        Some(pid)
+    }
+
+    fn match_pid_to_session_excluding(
+        pid_commands: &HashMap<u32, &str>,
+        session_dir: &str,
+        claimed_pids: &HashSet<u32>,
     ) -> Option<u32> {
         // Empty / single-character `session_dir` (e.g. "" or "/") would
         // make the substring fallback match unrelated commands, so skip
@@ -223,6 +244,9 @@ impl OpenCodeCollector {
             return None;
         }
         for (&pid, &cmd) in pid_commands {
+            if claimed_pids.contains(&pid) {
+                continue;
+            }
             if let Some(cwd) = get_process_cwd(pid) {
                 if cwd == session_dir {
                     return Some(pid);
@@ -254,7 +278,8 @@ impl OpenCodeCollector {
     }
 
     fn query_sessions(&self) -> Option<Vec<DbSession>> {
-        let session_sql = format!(r#"
+        let session_sql = format!(
+            r#"
 SELECT
   s.id, s.title, s.directory, s.version, s.time_created, s.time_updated,
   COALESCE(p.name, '') as project_name,
@@ -269,9 +294,12 @@ LEFT JOIN message m ON m.session_id = s.id
   AND json_extract(m.data, '$.role') = 'assistant'
 GROUP BY s.id
 ORDER BY s.time_updated DESC
-LIMIT {};"#, MAX_SESSIONS);
+LIMIT {};"#,
+            MAX_SESSIONS
+        );
 
-        let model_sql = format!(r#"
+        let model_sql = format!(
+            r#"
 SELECT
   s.id,
   COALESCE((SELECT json_extract(m2.data, '$.modelID')
@@ -284,7 +312,9 @@ SELECT
     ORDER BY m2.time_created DESC LIMIT 1), '') as provider
 FROM session s
 ORDER BY s.time_updated DESC
-LIMIT {};"#, MAX_SESSIONS);
+LIMIT {};"#,
+            MAX_SESSIONS
+        );
 
         // Two separate invocations to avoid fragile concatenated JSON parsing
         let rows = self.run_query(&session_sql)?;
@@ -404,7 +434,8 @@ fn get_process_cwd(pid: u32) -> Option<String> {
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     // lsof -Fn output: lines starting with 'n' contain the path
-    stdout.lines()
+    stdout
+        .lines()
         .find(|l| l.starts_with('n') && l.len() > 1)
         .map(|l| l[1..].to_string())
 }
@@ -423,18 +454,36 @@ mod tests {
     #[test]
     fn test_find_opencode_pids() {
         let mut info = HashMap::new();
-        info.insert(100, process::ProcInfo {
-            pid: 100, ppid: 1, rss_kb: 1000, cpu_pct: 0.0,
-            command: "/home/user/.opencode/bin/opencode".to_string(),
-        });
-        info.insert(200, process::ProcInfo {
-            pid: 200, ppid: 1, rss_kb: 500, cpu_pct: 0.0,
-            command: "grep opencode".to_string(),
-        });
-        info.insert(300, process::ProcInfo {
-            pid: 300, ppid: 1, rss_kb: 800, cpu_pct: 0.0,
-            command: "node /usr/bin/opencode run test".to_string(),
-        });
+        info.insert(
+            100,
+            process::ProcInfo {
+                pid: 100,
+                ppid: 1,
+                rss_kb: 1000,
+                cpu_pct: 0.0,
+                command: "/home/user/.opencode/bin/opencode".to_string(),
+            },
+        );
+        info.insert(
+            200,
+            process::ProcInfo {
+                pid: 200,
+                ppid: 1,
+                rss_kb: 500,
+                cpu_pct: 0.0,
+                command: "grep opencode".to_string(),
+            },
+        );
+        info.insert(
+            300,
+            process::ProcInfo {
+                pid: 300,
+                ppid: 1,
+                rss_kb: 800,
+                cpu_pct: 0.0,
+                command: "node /usr/bin/opencode run test".to_string(),
+            },
+        );
         let pids = OpenCodeCollector::find_opencode_pids(&info);
         assert!(pids.contains(&100));
         assert!(!pids.contains(&200)); // grep excluded
@@ -487,13 +536,34 @@ mod tests {
     #[test]
     fn match_pid_substring_fallback_still_works() {
         let mut pid_commands: HashMap<u32, &str> = HashMap::new();
-        pid_commands.insert(
-            u32::MAX,
-            "node /usr/bin/opencode run --cwd=/home/u/proj-a",
-        );
+        pid_commands.insert(u32::MAX, "node /usr/bin/opencode run --cwd=/home/u/proj-a");
         assert_eq!(
             OpenCodeCollector::match_pid_to_session(&pid_commands, "/home/u/proj-a"),
             Some(u32::MAX)
+        );
+    }
+
+    #[test]
+    fn match_pid_to_session_once_does_not_reuse_pid_for_old_rows() {
+        let mut pid_commands: HashMap<u32, &str> = HashMap::new();
+        pid_commands.insert(u32::MAX, "node /usr/bin/opencode run --cwd=/home/u/proj-a");
+        let mut claimed_pids = std::collections::HashSet::new();
+
+        assert_eq!(
+            OpenCodeCollector::match_pid_to_session_once(
+                &pid_commands,
+                "/home/u/proj-a",
+                &mut claimed_pids,
+            ),
+            Some(u32::MAX)
+        );
+        assert_eq!(
+            OpenCodeCollector::match_pid_to_session_once(
+                &pid_commands,
+                "/home/u/proj-a",
+                &mut claimed_pids,
+            ),
+            None
         );
     }
 }
