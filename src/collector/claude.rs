@@ -388,6 +388,9 @@ impl ClaudeCollector {
                     if delta.max_context_tokens > prev.max_context_tokens {
                         prev.max_context_tokens = delta.max_context_tokens;
                     }
+                    if delta.prev_cache_read > 0 {
+                        prev.prev_cache_read = delta.prev_cache_read;
+                    }
                     prev.turn_count += delta.turn_count;
                     // Always update current_task from delta — empty means
                     // latest assistant turn had no tool_use (task cleared)
