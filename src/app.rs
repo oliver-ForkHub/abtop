@@ -706,7 +706,7 @@ impl App {
         // Check if we have a pending confirmation for this exact session
         if let Some((idx, ts)) = self.kill_confirm.take() {
             if idx == self.selected && ts.elapsed().as_secs() < 2 {
-                // Confirmed — verify PID still runs expected binary before killing
+                // Confirmed — verify PID still runs a killable agent before killing
                 let pid = session.pid;
                 let verified = std::process::Command::new("ps")
                     .args(["-p", &pid.to_string(), "-o", "command="])
@@ -714,7 +714,7 @@ impl App {
                     .ok()
                     .map(|output| {
                         let cmd = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                        is_supported_agent_command(&cmd)
+                        is_killable_agent_command(&cmd)
                     })
                     .unwrap_or(false);
                 if !verified {
@@ -1083,6 +1083,11 @@ fn is_supported_agent_command(cmd: &str) -> bool {
         || crate::collector::process::cmd_has_binary(cmd, "opencode")
 }
 
+fn is_killable_agent_command(cmd: &str) -> bool {
+    is_supported_agent_command(cmd)
+        && !(crate::collector::process::cmd_has_binary(cmd, "codex") && cmd.contains(" app-server"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1174,5 +1179,14 @@ mod tests {
         assert!(is_supported_agent_command("codex --resume abc"));
         assert!(is_supported_agent_command("/opt/homebrew/bin/opencode"));
         assert!(!is_supported_agent_command("node server.js"));
+    }
+
+    #[test]
+    fn killable_agent_command_rejects_codex_app_server() {
+        assert!(is_killable_agent_command("codex --resume abc"));
+        assert!(is_killable_agent_command("/usr/local/bin/claude"));
+        assert!(!is_killable_agent_command(
+            "/Applications/Codex.app/Contents/Resources/codex app-server --analytics-default-enabled"
+        ));
     }
 }

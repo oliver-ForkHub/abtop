@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
 
-/// Active-thread mtime threshold: a rollout written within the last
+/// Active-thread mtime threshold: a rollout written within the last 30 minutes
 /// ACTIVE_MTIME_SECS counts as "active". File-descriptor presence alone
 /// would overcount — `codex mcp-server` keeps fds open for hours after
 /// a thread last wrote (so it can resume on demand), so we need a
 /// freshness signal in addition to fd presence.
-pub const ACTIVE_MTIME_SECS: u64 = 30;
+pub const ACTIVE_MTIME_SECS: u64 = 30 * 60;
 
 /// One open `rollout-*.jsonl` fd held by an mcp-server process.
 #[derive(Clone, Debug)]
@@ -359,7 +359,7 @@ mod tests {
         let now = SystemTime::now();
         let stale = McpRollout {
             path: PathBuf::from("/x"),
-            mtime: Some(now - std::time::Duration::from_secs(120)),
+            mtime: Some(now - std::time::Duration::from_secs(31 * 60)),
             size_bytes: 0,
         };
         let fresh = McpRollout {
