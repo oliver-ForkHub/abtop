@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -33,7 +33,7 @@ pub struct FileAccess {
 pub const MAX_FILE_ACCESSES: usize = 1000;
 
 /// Account-level rate limit info (shared across all sessions).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct RateLimitInfo {
     /// "claude" or "codex"
     pub source: String,
@@ -49,7 +49,7 @@ pub struct RateLimitInfo {
     pub updated_at: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum SessionStatus {
     /// Model is generating a response (last_user_ts_ms > 0)
     Thinking,
@@ -72,7 +72,7 @@ impl SessionStatus {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ChildProcess {
     pub pid: u32,
     pub command: String,
@@ -81,7 +81,7 @@ pub struct ChildProcess {
 }
 
 /// A port left open by a process whose parent session has ended.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct OrphanPort {
     pub port: u16,
     pub pid: u32,

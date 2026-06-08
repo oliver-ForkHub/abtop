@@ -4,7 +4,9 @@
 //! callers should treat absence as "metrics unavailable" and render a graceful
 //! fallback.
 
-#[derive(Debug, Clone, Copy)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct HostMetrics {
     /// Aggregate CPU usage in percent (0.0 - 100.0). Computed across all cores.
     pub cpu_pct: f64,
@@ -141,7 +143,7 @@ fn sample_load() -> Option<f64> {
 }
 
 /// Aggregate per-session metrics into a single agent-wide summary.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct AgentAggregate {
     pub mem_mb: u64,
     /// Average context window fill across active sessions (0.0 - 100.0).

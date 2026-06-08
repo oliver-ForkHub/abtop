@@ -490,7 +490,21 @@ impl App {
         self.status_msg = Some((msg, Instant::now()));
     }
 
+    /// Full refresh used by the TUI: collect monitored data, then generate and
+    /// retry session summaries. Equivalent to [`App::tick_no_summaries`] followed
+    /// by [`App::drain_and_retry_summaries`].
     pub fn tick(&mut self) {
+        self.tick_no_summaries();
+        self.drain_and_retry_summaries();
+    }
+
+    /// Refresh all monitored data WITHOUT spawning background summary jobs.
+    ///
+    /// `tick` additionally calls [`App::drain_and_retry_summaries`], which
+    /// shells out to `claude --print` to generate session titles. Headless
+    /// consumers (e.g. the web snapshot API) call this variant so they never
+    /// spawn subprocesses or consume the user's Claude quota.
+    pub fn tick_no_summaries(&mut self) {
         self.collector.set_mcp_suppress(self.mcp_suppress_sessions);
         self.sessions = self.collector.collect();
         self.orphan_ports = self.collector.orphan_ports.clone();
@@ -532,8 +546,6 @@ impl App {
         }
 
         promote_waiting_to_rate_limited(&mut self.sessions, &self.rate_limits);
-
-        self.drain_and_retry_summaries();
     }
 
     /// Drain completed summary results and spawn retries. Does NOT recollect
